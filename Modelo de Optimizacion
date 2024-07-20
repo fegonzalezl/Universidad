@@ -1,0 +1,81 @@
+import gurobipy as gp
+from gurobipy import GRB
+import random
+from tabulate import tabulate
+
+# Datos
+equipos = ["Colo Colo", "U. de Chile", "Unión Española", "Wanderers", 
+           "Huachipato", "U. de Concepción", "Dep. Antofagasta", "Dep. Iquique"]
+num_equipos = len(equipos)
+num_fechas = num_equipos - 1  # Cada equipo juega una vez contra cada otro equipo
+
+# Crear el modelo
+model = gp.Model("fixture_liga")
+
+# Variables
+x = model.addVars(num_equipos, num_equipos, num_fechas, vtype=GRB.BINARY, name="x")
+y = model.addVars(num_equipos, num_fechas, vtype=GRB.BINARY, name="y")
+w = model.addVars(num_equipos, num_fechas, vtype=GRB.BINARY, name="w")
+
+# Restricción 1: Cada par de equipos se enfrenta exactamente una vez
+model.addConstrs((gp.quicksum(x[i, j, k] + x[j, i, k] for k in range(num_fechas)) == 1
+                  for i in range(num_equipos) for j in range(num_equipos) if i != j))
+
+# Restricción 2: Cada equipo juega exactamente un partido en cada fecha
+model.addConstrs((gp.quicksum(x[i, j, k] + x[j, i, k] for j in range(num_equipos)) == 1
+                  for i in range(num_equipos) for k in range(num_fechas)))
+
+# Restricción 3: Cada equipo juega como local en dos fechas consecutivas a lo sumo una vez
+model.addConstrs((y[i, k] + y[i, k+1] <= 1 for i in range(num_equipos) for k in range(num_fechas - 1)))
+
+# Restricción 4: Cada equipo juega como visitante en dos fechas consecutivas a lo sumo una vez
+model.addConstrs((w[i, k] + w[i, k+1] <= 1 for i in range(num_equipos) for k in range(num_fechas - 1)))
+
+# Restricción 5: Si un equipo juega como local en dos fechas consecutivas, no puede jugar contra el mismo equipo en esas fechas
+model.addConstrs((gp.quicksum(x[i, j, k] + x[i, j, k+1] for j in range(num_equipos)) <= 1 + y[i, k]
+                  for i in range(num_equipos) for k in range(num_fechas - 1)))
+
+# Restricción 6: Si un equipo juega como visitante en dos fechas consecutivas, no puede jugar contra el mismo equipo en esas fechas
+model.addConstrs((gp.quicksum(x[j, i, k] + x[j, i, k+1] for j in range(num_equipos)) <= 1 + w[i, k]
+                  for i in range(num_equipos) for k in range(num_fechas - 1)))
+
+# Restricción adicional: No pueden haber 2 partidos de alta convocatoria en la misma fecha
+colo_colo = equipos.index("Colo Colo")
+u_de_chile = equipos.index("U. de Chile")
+model.addConstrs((gp.quicksum(x[colo_colo, j, k] for j in range(num_equipos)) +
+                  gp.quicksum(x[u_de_chile, j, k] for j in range(num_equipos)) <= 1
+                  for k in range(num_fechas)))
+
+# Restricción adicional: Colo Colo y U. de Chile deben jugar en la fecha 6
+fecha_especifica = 5  # Python indexa desde 0, por lo que la fecha 6 es el índice 5
+model.addConstr((x[colo_colo, u_de_chile, fecha_especifica] + x[u_de_chile, colo_colo, fecha_especifica] == 1))
+
+# Restricción adicional: Huachipato y U. de Concepción deben jugar en la fecha 6
+huachipato = equipos.index("Huachipato")
+u_de_concepcion = equipos.index("U. de Concepción")
+model.addConstr((x[huachipato, u_de_concepcion, fecha_especifica] + x[u_de_concepcion, huachipato, fecha_especifica] == 1))
+
+# Función objetivo: Minimizar la suma de X_ijk
+model.setObjective(gp.quicksum(x[i, j, k] for i in range(num_equipos)
+                               for j in range(num_equipos) for k in range(num_fechas)), GRB.MINIMIZE)
+
+# Optimizar el modelo
+model.optimize()
+
+# Imprimir resultados
+if model.status == GRB.OPTIMAL:
+    resultados = []
+    for k in range(num_fechas):
+        fecha_resultados = [f"Fecha {k+1}"]
+        for i in range(num_equipos):
+            for j in range(num_equipos):
+                if x[i, j, k].X > 0.5:
+                    fecha_resultados.append(f"{equipos[i]} vs {equipos[j]}")
+        resultados.append(fecha_resultados)
+    
+    # Formatear y mostrar los resultados en una tabla
+    headers = ["Fecha", "Partidos"]
+    tabla = tabulate(resultados, headers=headers, tablefmt="grid")
+    print(tabla)
+else:
+    print("No se encontró una solución óptima")
